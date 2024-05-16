@@ -10,9 +10,9 @@ from data import HUMAN_EVAL
 
 def entrypoint():
     all_results = []
-    run_folders = ["gpt-4"]  # edit
+    run_folders = ["Meta-Llama-3-70B-Instruct"]  # edit
     for folder in run_folders:
-        all_results.append(eval(f"preds/{folder}", "1"))
+        all_results.append(eval(f"./preds/{folder}", "1"))
 
     for res, folder in zip(all_results, run_folders):
         print(f"{folder}: {res}")

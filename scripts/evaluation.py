@@ -3,17 +3,19 @@
 import itertools
 import math
 import os
+import subprocess
+import psutil
 from collections import defaultdict
 from typing import Dict, List, Union
 
 import numpy as np
 import tqdm
 from loguru import logger
-from utils import cleanup_file, cmd
+from utils import cleanup_file, cwpu
 
 from data import HUMAN_EVAL, read_problems, stream_jsonl, write_jsonl
 
-
+count = 0
 class ParseError(Exception):
     pass
 
@@ -96,24 +98,47 @@ def is_equal(result_type, result, true):
             return result == true
 
 
-def exec(name, path, call_path) -> bool:
-    if not cmd(f"cobc -w -fformat=variable -x {call_path} {path}"):
+def cmd(command, timeout=None):
+    """
+    Executes a shell command with an optional timeout and ensures complete termination of all subprocesses.
+    """
+    # Start the subprocess
+    process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        if process.returncode != 0:
+            logger.warning(f"Command failed with error: {stderr.decode()}")
+            return False
+        return True
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Command timed out: {command}")
+        # Use psutil to kill all child processes as well
+        try:
+            parent = psutil.Process(process.pid)
+            for child in parent.children(recursive=True):
+                child.kill()
+            parent.kill()
+        except psutil.NoSuchProcess:
+            pass
+        return False
+
+
+def exec(name, path, call_path, timeout=30) -> bool:
+    """
+    Compile and execute a COBOL program with a timeout.
+    """
+    # Convert Windows path to WSL path
+    wsl_path = path.replace("C:\\", "/mnt/c/").replace("\\", "/")
+    wsl_call_path = call_path.replace("C:\\", "/mnt/c/").replace("\\", "/")
+
+    if not cmd(f"wsl cobc -w -fformat=variable -x {wsl_call_path} {wsl_path}", timeout=timeout):
         logger.warning(f"Compile error for {path}")
         return False
 
-    # WARNING
-    # This program exists to execute untrusted model-generated code. Although
-    # it is highly unlikely that model-generated code will do something overtly
-    # malicious in response to this test suite, model-generated code may act
-    # destructively due to a lack of model capability or alignment.
-    # Users are strongly encouraged to sandbox this evaluation suite so that it
-    # does not perform destructive actions on their host or network.
-    # Once you have read this disclaimer and taken appropriate precautions,
-    # uncomment the following lines and proceed at your own risk:
-
-    # if not cmd(f"./call_{name}"):
-    #     logger.warning(f"Runtime error for {path}")
-    #     return False
+    # Uncomment and modify the following lines to execute the program using WSL
+    if not cmd(f"wsl ./call_{name}", timeout=timeout):
+        logger.warning(f"Runtime error for {path}")
+        return False
 
     return True
 
@@ -123,15 +148,18 @@ def check_correctness(problem: Dict, completion: str, base_path: str) -> Dict:
     Check the correctness of a single completion
     """
     name, tests = problem["entry_point"], problem["tests"]
+    global count
+    count += 1
+    print(count)
     path, call_path = (
-        os.path.join(base_path, f"solutions/{name}.cbl"),
-        os.path.join(base_path, f"callers/call_{name}.cbl"),
+        f"{base_path}/solutions/{name}.cbl",
+        f"{base_path}/callers/call_{name}.cbl"
     )
     result_path = f"{name.upper().replace('_', '-')}.TXT"
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    os.makedirs(os.path.dirname(call_path), exist_ok=True)
+    os.makedirs(os.path.dirname(cwpu(path)), exist_ok=True)
+    os.makedirs(os.path.dirname(cwpu(call_path)), exist_ok=True)
 
-    with open(path, "w") as f:
+    with open(path, "w", encoding='utf-8') as f:  # Specify UTF-8 encoding here
         f.write(completion)
 
     passed, trues, results, compiled = [], [], [], []
@@ -145,14 +173,15 @@ def check_correctness(problem: Dict, completion: str, base_path: str) -> Dict:
         results.append(None)
         compiled.append(False)
 
-        with open(call_path, "w") as f:
+        with open(call_path, "w", encoding='utf-8') as f:  # Specify UTF-8 encoding here
             f.write(test["test"])
 
         try:
             if exec(name, path, call_path):
                 compiled[-1] = True
 
-                with open(result_path) as f:
+                with open(result_path, encoding='utf-8') as f:  # Specify UTF-8 encoding here
+                
                     result = f.readlines()
 
                 if result:
@@ -213,10 +242,13 @@ def evaluate_functional_correctness(
     results to f"{sample_file}_results.jsonl.gz"
     """
     problems = read_problems(problem_file)
+    print(problems)
+    print(len(problems))
+    print("ok")
 
-    sample_file = os.path.join(base_path, "samples.jsonl")
-    solutions_path = os.path.join(base_path, "solutions")
-    calls_path = os.path.join(base_path, "callers")
+    sample_file = f"{base_path}/samples.jsonl"
+    solutions_path = f"{base_path}/solutions"
+    calls_path = f"{base_path}/callers"
     os.makedirs(solutions_path, exist_ok=True)
     os.makedirs(calls_path, exist_ok=True)
 

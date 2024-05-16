@@ -6,7 +6,8 @@ import os
 from typing import Dict, Iterable
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HUMAN_EVAL = os.path.join(ROOT, "data", "CobolEval.jsonl")
+HUMAN_EVAL = f"C:/Users/Mobeen/Desktop/Office/cobolEval/data/CobolEval.jsonl"
+
 
 
 def read_problems(evalset_file: str = HUMAN_EVAL) -> Dict[str, Dict]:
@@ -52,6 +53,8 @@ def write_jsonl(filename: str, data: Iterable[Dict], append: bool = False):
 
 if __name__ == "__main__":
     import pprint
+    print("here")
+    print(HUMAN_EVAL)
 
     problems = read_problems()
     for p, v in problems.items():

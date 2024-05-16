@@ -23,7 +23,7 @@ def cmd(cmd: str) -> bool:
         shell=True,
         text=True,
         capture_output=True,
-        timeout=5,
+        timeout=15,
     )
 
     if process.stderr:
@@ -44,3 +44,15 @@ def cleanup_file(name: str):
         os.remove(f"{name}")
     except FileNotFoundError:
         logger.warning(f"Exe {name} not found")
+
+def cwpu(path: str) -> str:
+    """
+    Convert a Windows file path to a Unix file path.
+
+    Args:
+    path (str): The Windows file path to convert.
+
+    Returns:
+    str: The converted Unix file path.
+    """
+    return path.replace('C:', '/mnt/c')

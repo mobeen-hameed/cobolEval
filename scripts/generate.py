@@ -10,9 +10,15 @@ from loguru import logger
 from marko.block import FencedCode
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 from utils import Model, cleanup_dylib, cmd
+from groq import Groq
+import requests
+
+client = Groq()
+count=0
 
 
 dotenv.load_dotenv()
+openai.api_key = os.getenv('OPENAI_API_KEY')
 
 
 memory = Memory("cache", verbose=0)
@@ -24,6 +30,19 @@ OPENAI_SYSTEM_PROMPT = """```
 
 Complete the above program. It should consist of a single markdown code block following on from the lines above until the end of the program. It should terminate with `GOBACK`."""
 
+def get_part2(input_string):
+    # Find the index of "GOBACK."
+    goback_index = input_string.find('GOBACK')
+    
+    # If "GOBACK" is found, split the string at that point
+    if goback_index != -1:
+        # Include everything after "GOBACK" in the second part
+        part2 = input_string[goback_index + len('GOBACK'):]
+    else:
+        # If "GOBACK" is not found, return an empty string
+        part2 = ''
+
+    return part2
 
 @memory.cache
 @retry(wait=wait_random_exponential(min=1, max=10), stop=stop_after_attempt(3))
@@ -84,7 +103,8 @@ class LLMGenerator:
     def __init__(self, model: Model):
         self.model = model
         self.output_path = f"./preds/{model.name}"
-        self.solutions_path = os.path.join(self.output_path, "solutions")
+        self.solutions_path = f"{self.output_path}/solutions"
+        print(self.solutions_path)
         os.makedirs(self.solutions_path, exist_ok=True)
 
         with open("./data/CobolEval.jsonl", "r") as f:
@@ -97,7 +117,7 @@ class LLMGenerator:
     def eval(self):
         for e in self.evals:
             name = f"{e['entry_point']}"
-            path = os.path.join(self.solutions_path, f"{e['entry_point']}.cbl")
+            path = f"{self.solutions_path}/{e['entry_point']}.cbl"
             for k in range(self.model.samples_per_task):
                 try:
                     program = self.solve(e, k)
@@ -111,7 +131,7 @@ class LLMGenerator:
                     with open(path, "w+") as f:
                         f.write(program)
 
-                    compiles = cmd(f"cobc -fformat=variable {path}")
+                    compiles = cmd(f"wsl cobc -fformat=variable {path}")
                     if compiles:
                         self.compiled += 1
                         cleanup_dylib(name)
@@ -318,9 +338,76 @@ class HuggingfaceInfill(LLMGenerator):
         store = "      * Store the result in the RESULT variable and mark the end of your program with END PROGRAM\n"
         suffix = "\n".join(lines[linkage_section:complete] + [store])
         return prefix, suffix
+    
+class GroqChat(LLMGenerator):
+    def __init__(self, model: Model):
+        super().__init__(model)
+
+    def solve(self, eval, sample_id=0):
+        # Implement the method to call Groq's API and handle the response
+        global count
+        count += 1
+        print(count)
+        response = client.chat.completions.create(
+            model=model.name,
+            messages=[
+                {"role": "system", "content": OPENAI_SYSTEM_PROMPT.format(eval["prompt"])},
+            ],
+            temperature=0,
+            max_tokens=1024,
+            top_p=1,
+            stream=False,
+            stop=None
+        )
+        # Assuming the response handling is similar to OpenAI's
+        print(response.choices[0].message.content)
+        #print(type(response.choices[0].message.content))
+        sol = extract_code_block(response.choices[0].message.content)
+        program = self.construct(eval["prompt"], sol)
+        return program
+
+    def construct(self, prompt: str, sol: str):
+        if sol.strip().startswith("WORKING-STORAGE SECTION."):
+            sol = sol.replace("WORKING-STORAGE SECTION.", "")
+
+        prog = f"{prompt}\n{sol}"
+        return swap_sections(prog)
+    
+class HuggingFaceChat(LLMGenerator):
+    def __init__(self, model: Model):
+        super().__init__(model)
+
+    def solve(self, eval, sample_id=0):
+        # Implement the method to call Groq's API and handle the response
+        global count
+        count += 1
+        print(count)
+        API_URL = "https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-70B-Instruct"
+        headers = {"Authorization": "Bearer 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"}
+        response = requests.post(API_URL, headers=headers, json={"inputs": OPENAI_SYSTEM_PROMPT.format(eval["prompt"])})
+        print(response.json())
+        # Assuming the response handling is similar to OpenAI's
+        sol = extract_code_block(get_part2(response.json()[0]['generated_text']))
+        program = self.construct(eval["prompt"], sol)
+        return program
+
+    def construct(self, prompt: str, sol: str):
+        if sol.strip().startswith("WORKING-STORAGE SECTION."):
+            sol = sol.replace("WORKING-STORAGE SECTION.", "")
+
+        prog = f"{prompt}\n{sol}"
+        return swap_sections(prog)
 
 
 if __name__ == "__main__":
-    model = Model(name="gpt-4", samples_per_task=1)
-    runner = OpenAIChat(model)
+    # model = Model(name="gpt-3.5-turbo", samples_per_task=1)
+    # runner = OpenAIChat(model)
+    # runner.eval()
+    
+    #model = Model(name="llama3-70b-8192", samples_per_task=1)  
+    #runner = GroqChat(model)  # This assumes you have a GroqChat class similar to OpenAIChat
+    #runner.eval()
+
+    model = Model(name="Meta-Llama-3-70B-Instruct", samples_per_task=1)
+    runner = HuggingFaceChat(model)
     runner.eval()
